@@ -1,3 +1,15 @@
+---
+name: cli-anything-hermes
+description: Hermes Agent skill for CLI-Anything — enables AI agents to build CLI harnesses for any GUI application. Based on HKUDS/CLI-Anything's HARNESS.md methodology.
+version: 1.0.0
+author: ligl0325 (based on HKUDS/CLI-Anything)
+license: Apache 2.0
+metadata:
+  hermes:
+    tags: [cli, harness, hermes, gui-to-cli, agent-tools]
+    homepage: https://github.com/HKUDS/CLI-Anything
+---
+
 # CLI-Anything for Hermes Agent
 
 ## Overview
