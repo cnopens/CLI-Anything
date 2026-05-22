@@ -8,7 +8,7 @@ The suite has two files:
 
 Real-backend classes are skipped automatically when `joplin` is not on `PATH`.
 
-## test_core.py (85 tests, 1 skipped on Windows)
+## test_core.py (91 tests)
 
 Pure Python tests covering the harness surface. Safe to run anywhere without
 a Joplin backend.
@@ -24,6 +24,14 @@ Coverage areas:
   benign Node warning handling (scrubbed copy used only for the non-zero exit
   decision; returned `stdout`/`stderr` stay verbatim), mixed warning+real-error
   surfacing, timeout, JSON parse fallback, empty stdout
+- Node warning continuation line (`(Use \`node --trace-deprecation …\`)`):
+  the hint line Node appends after each deprecation warning is now also dropped
+  during scrubbing so warning-only stderr no longer triggers a false
+  `RuntimeError`; `run_joplin_json` parses JSON even when warning + hint prefix
+  the payload; real errors after warning+hint are still surfaced
+- `server_start` timeout: `exit_early=True` uses a finite cap (300 s);
+  `exit_early=False` passes `timeout=None` so a long-lived `--wait` server
+  process is never killed by a hard deadline
 - Backend stdout preservation: multi-paragraph note bodies keep internal blank
   lines; `run_joplin_json` parses JSON when a Node warning prefixes stdout
 - Error envelope command ID consistency: failures on `config import-file`,

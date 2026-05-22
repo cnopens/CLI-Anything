@@ -316,6 +316,76 @@ def test_backend_run_command_node_warning_passes(monkeypatch):
     assert result["stderr"] == _WARNING
 
 
+def test_backend_run_command_node_warning_with_continuation_passes(monkeypatch):
+    """Regression (P1): Node always appends a hint line after each warning:
+
+        (node:…) [DEP0040] DeprecationWarning: …
+        (Use `node --trace-deprecation …` to show where the warning was created)
+
+    Before the fix, the continuation line was kept after scrubbing, making
+    scrubbed_stderr non-empty, which caused run_joplin_command to raise even
+    though the exit was caused only by benign Node noise.
+    """
+    _WARN = "(node:1234) [DEP0040] DeprecationWarning: The `punycode` module is deprecated."
+    _HINT = "(Use `node --trace-deprecation ...` to show where the warning was created)"
+    _STDERR = f"{_WARN}\n{_HINT}"
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = _STDERR
+
+    monkeypatch.setattr(joplin_backend, "find_joplin", lambda _: "joplin")
+    monkeypatch.setattr(joplin_backend.subprocess, "run", lambda *a, **k: Proc())
+    cfg = joplin_backend.BackendConfig(binary="joplin", profile=None)
+    # Must not raise — both lines are benign warning/hint noise.
+    result = joplin_backend.run_joplin_command(["ls"], cfg)
+    assert result["returncode"] == 1
+    assert result["stderr"] == _STDERR  # raw stream still intact
+
+
+def test_backend_run_json_parses_despite_warning_and_continuation_prefix(monkeypatch):
+    """run_joplin_json must succeed when both the warning AND its hint line
+    are emitted to stdout ahead of the JSON payload."""
+    _WARN = "(node:7) [DEP0040] DeprecationWarning: The `punycode` module is deprecated."
+    _HINT = "(Use `node --trace-deprecation ...` to show where the warning was created)"
+    _JSON = '[{"title":"NoteA"}]'
+
+    class Proc:
+        returncode = 0
+        stdout = f"{_WARN}\n{_HINT}\n{_JSON}"
+        stderr = ""
+
+    monkeypatch.setattr(joplin_backend, "find_joplin", lambda _: "joplin")
+    monkeypatch.setattr(joplin_backend.subprocess, "run", lambda *a, **k: Proc())
+    cfg = joplin_backend.BackendConfig(binary="joplin", profile=None)
+    result = joplin_backend.run_joplin_json(["ls", "--format", "json"], cfg)
+    assert isinstance(result["data"], list)
+    assert result["data"][0]["title"] == "NoteA"
+
+
+def test_backend_run_command_real_error_not_masked_by_warning_with_hint(monkeypatch):
+    """A real Joplin error must surface even when stderr contains both the
+    benign warning AND its continuation hint line before the error text."""
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = (
+            "(node:1234) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.\n"
+            "(Use `node --trace-deprecation ...` to show where the warning was created)\n"
+            "Error: Cannot find \"missing-note\"."
+        )
+
+    monkeypatch.setattr(joplin_backend, "find_joplin", lambda _: "joplin")
+    monkeypatch.setattr(joplin_backend.subprocess, "run", lambda *a, **k: Proc())
+    cfg = joplin_backend.BackendConfig(binary="joplin", profile=None)
+    with pytest.raises(RuntimeError) as excinfo:
+        joplin_backend.run_joplin_command(["cat", "missing-note"], cfg)
+    assert "Cannot find" in str(excinfo.value)
+    assert "DEP0040" not in str(excinfo.value)
+
+
 def test_backend_run_command_real_error_alongside_warning_raises(monkeypatch):
     """Regression: a real Joplin error must surface even when stderr also
     contains the benign DEP0040 punycode deprecation warning."""
@@ -412,6 +482,44 @@ def test_backend_run_command_timeout(monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         joplin_backend.run_joplin_command(["ls"], cfg, timeout=1)
     assert "timed out" in str(excinfo.value)
+
+
+def test_backend_server_start_exit_early_uses_finite_timeout(monkeypatch):
+    """P2 regression: server_start(exit_early=True) must pass a finite timeout."""
+    captured = {}
+
+    class Proc:
+        returncode = 0
+        stdout = "Server started"
+        stderr = ""
+
+    def fake_run(cmd, *a, **k):
+        captured["timeout"] = k.get("timeout")
+        return Proc()
+
+    monkeypatch.setattr(backend_core, "find_joplin", lambda _: "joplin")
+    monkeypatch.setattr(backend_core, "run_joplin_command",
+                        lambda args, cfg, timeout=120: captured.update({"timeout": timeout}) or
+                        {"command": args, "returncode": 0, "stdout": "", "stderr": ""})
+    cfg = joplin_backend.BackendConfig()
+    backend_core.server_start(cfg, exit_early=True)
+    assert captured["timeout"] is not None
+    assert captured["timeout"] > 0
+
+
+def test_backend_server_start_no_exit_early_uses_no_timeout(monkeypatch):
+    """P2 regression: server_start(exit_early=False) must pass timeout=None so
+    a long-lived server process is never killed by a hard deadline."""
+    captured = {}
+
+    monkeypatch.setattr(backend_core, "run_joplin_command",
+                        lambda args, cfg, timeout=120: captured.update({"timeout": timeout}) or
+                        {"command": args, "returncode": 0, "stdout": "", "stderr": ""})
+    cfg = joplin_backend.BackendConfig()
+    backend_core.server_start(cfg, exit_early=False)
+    assert captured["timeout"] is None, (
+        f"Expected timeout=None for --wait mode, got {captured['timeout']}"
+    )
 
 
 def test_backend_run_json_parse(monkeypatch):

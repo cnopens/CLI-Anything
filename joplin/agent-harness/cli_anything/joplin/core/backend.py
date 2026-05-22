@@ -155,7 +155,13 @@ def server_start(config: BackendConfig, exit_early: bool = True, quiet: bool = F
         args.append("--exit-early")
     if quiet:
         args.append("--quiet")
-    return run_joplin_command(args, config, timeout=300)
+    # When exit_early is True the CLI returns as soon as the server is up
+    # (~5 s), so a 300 s safety cap is reasonable.  When exit_early is False
+    # the CLI intentionally blocks for the lifetime of the server process;
+    # imposing any fixed timeout would terminate a legitimately long-running
+    # server, so we pass None (no timeout) in that mode.
+    timeout = 300 if exit_early else None
+    return run_joplin_command(args, config, timeout=timeout)
 
 
 def server_stop(config: BackendConfig) -> dict:

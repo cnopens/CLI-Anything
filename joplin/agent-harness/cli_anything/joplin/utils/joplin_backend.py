@@ -39,15 +39,37 @@ def _line_is_benign_node_warning(line: str) -> bool:
     return any(all(marker in lowered for marker in markers) for markers in _BENIGN_NODE_WARNING_MARKERS)
 
 
+def _line_is_node_warning_continuation(line: str) -> bool:
+    """Return True for the hint line that Node prints after each deprecation warning.
+
+    Node consistently follows each DeprecationWarning with a one-line hint of
+    the form ``(Use `node --trace-deprecation ...` to show where the warning
+    was created)``.  That line is *not* a warning header, so
+    ``_line_is_benign_node_warning`` does not match it.  Without this check,
+    the continuation line is kept and makes the scrubbed text non-empty,
+    causing ``run_joplin_command`` to raise on what are purely benign warnings.
+    """
+    stripped = line.strip()
+    lowered = stripped.lower()
+    # The hint always starts with "(use" and references --trace-deprecation.
+    return stripped.startswith("(Use ") or (
+        lowered.startswith("(use") and "--trace-deprecation" in lowered
+    )
+
+
 def _strip_benign_node_warnings(text: str) -> str:
     """Return ``text`` with known-benign Node warning lines removed.
 
-    The filter is line-based and only drops the Node warning lines themselves
-    (and any blank padding emitted around them). Real diagnostic content is
-    preserved verbatim, including blank lines between paragraphs. Callers
-    must NOT use the returned value to replace ``stdout`` payloads -- it is
-    only meant for the success/failure decision, where collapsing trailing
-    blank padding around dropped warning lines is desirable.
+    The filter is line-based and drops:
+    - Lines matching ``_line_is_benign_node_warning``
+    - The immediately following hint/continuation line if it matches
+      ``_line_is_node_warning_continuation`` (e.g. the "Use node
+      --trace-deprecation ..." line Node always emits after each warning)
+    - Blank padding lines that hug a dropped line
+
+    Real diagnostic content is preserved verbatim, including blank lines
+    between paragraphs. Callers must NOT use the returned value to replace
+    ``stdout`` payloads -- it is only meant for the success/failure decision.
     """
     if not text:
         return ""
@@ -55,19 +77,24 @@ def _strip_benign_node_warnings(text: str) -> str:
     benign_indices: set[int] = set()
     for idx, raw_line in enumerate(lines):
         stripped = raw_line.strip()
-        if stripped and _line_is_benign_node_warning(stripped):
+        if not stripped:
+            continue
+        if _line_is_benign_node_warning(stripped):
             benign_indices.add(idx)
+            # Also drop the continuation/hint line that Node appends right
+            # after each deprecation warning.
+            next_idx = idx + 1
+            if next_idx < len(lines) and _line_is_node_warning_continuation(lines[next_idx]):
+                benign_indices.add(next_idx)
     if not benign_indices:
         return text.strip()
-    # Drop the warning lines themselves and any blank padding that hugs them
-    # (Node tends to emit a blank line before and after each warning), but
-    # keep blank lines that are part of legitimate payload structure.
+    # Drop the warning/continuation lines and blank padding around them,
+    # but keep blank lines that are part of legitimate payload structure.
     kept: list[str] = []
     for idx, raw_line in enumerate(lines):
         if idx in benign_indices:
             continue
         if raw_line.strip() == "":
-            # Drop the blank line only when it is sandwiched against a warning
             prev_is_warning = (idx - 1) in benign_indices
             next_is_warning = (idx + 1) in benign_indices
             if prev_is_warning or next_is_warning:
@@ -76,7 +103,7 @@ def _strip_benign_node_warnings(text: str) -> str:
     return "\n".join(kept).strip()
 
 
-def run_joplin_command(args: list[str], config: BackendConfig, timeout: int = 120) -> dict:
+def run_joplin_command(args: list[str], config: BackendConfig, timeout: Optional[int] = 120) -> dict:
     binary = find_joplin(config.binary)
     cmd = [binary]
     if config.profile:
@@ -92,7 +119,7 @@ def run_joplin_command(args: list[str], config: BackendConfig, timeout: int = 12
             check=False,
         )
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"Joplin command timed out after {timeout}s") from e
+        raise RuntimeError(f"Joplin command timed out after {timeout}s") from e  # timeout is non-None here
 
     # IMPORTANT: stdout is the caller's payload (note bodies, JSON dumps,
     # config exports, ...). Preserve it verbatim -- collapsing blank lines or
@@ -122,7 +149,7 @@ def run_joplin_command(args: list[str], config: BackendConfig, timeout: int = 12
     return result
 
 
-def run_joplin_json(args: list[str], config: BackendConfig, timeout: int = 120) -> dict:
+def run_joplin_json(args: list[str], config: BackendConfig, timeout: Optional[int] = 120) -> dict:
     command_args = args if "--format" in args or "-f" in args else args + ["--format", "json"]
     raw = run_joplin_command(command_args, config, timeout=timeout)
     text = raw["stdout"]
