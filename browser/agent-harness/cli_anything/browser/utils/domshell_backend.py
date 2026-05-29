@@ -290,6 +290,36 @@ def _anchor_path_cmd(deeper: str = "") -> str:
     return f"cd {_here_path(deeper)}"
 
 
+def _require_session_for_split_check(
+    wrapper: str, session: Any, use_daemon: bool,
+) -> None:
+    """Raise if a split-and-check wrapper would lose lane consistency.
+
+    Split-and-check patterns (anchor → op → restore as separate
+    ``_call_execute`` calls) need all three calls in the same DOMShell
+    lane. In daemon mode the persistent connection guarantees that
+    naturally; otherwise the wrapper needs ``session.domshell_lane_id``
+    to forward via ``group_id`` on each call. Without either, the
+    anchor lands in lane A and the operation lands in lane B — same
+    lane-isolation regression as round-5's first failure mode.
+
+    The general rule: any wrapper that issues multiple
+    ``_call_execute`` calls whose correctness depends on shared lane
+    state requires a session in non-daemon mode. Mirrors the round-6.1
+    guard in ``type_text``; applied to ``ls`` / ``cat`` / ``click``
+    absolute paths and ``grep`` rooted paths (both absolute and
+    relative) in round 7.2. Centralizes the contract so future
+    multi-call wrappers can call into the same check.
+    """
+    if session is None and not use_daemon:
+        raise ValueError(
+            f"{wrapper}: a session argument is required in non-daemon "
+            "mode for rooted paths so the anchor cd and the operation "
+            "share a DOMShell lane. Either pass a Session, use an "
+            "unrooted form, or enable daemon mode."
+        )
+
+
 # CSI (ANSI) escape sequences DOMShell wraps error text in (typically red).
 # Strip them before prefix-matching "error" so an ANSI-coloured error line
 # isn't misread as success.
@@ -404,9 +434,26 @@ def _parse_execute_result(result: Any, command: str) -> dict:
         matches = [ln for ln in text.splitlines() if ln.strip()]
         return {"matches": matches, "raw": text}
 
-    # cd / cat / click / focus / type / open / refresh / back / forward
-    # all funnel through the CLI's generic dict pretty-printer; an
-    # ``{"output": text}`` shape is enough.
+    if command in ("back", "forward", "navigate", "open"):
+        # Navigation commands typically respond with a `URL: <url>`
+        # (and often `Title: <title>`) line — extract both so
+        # `page.go_back` / `page.go_forward`'s `"url" in result` guards
+        # actually fire and `session.set_url` updates correctly. (Round
+        # 7's parser made these guards permanently False; this is the
+        # Codex P2 #1 fix.) The raw `output` is preserved alongside so
+        # CLI display paths still work.
+        nav: dict = {"output": text}
+        url_match = re.search(r"URL:\s+(\S+)", text)
+        if url_match:
+            nav["url"] = url_match.group(1)
+        title_match = re.search(r"Title:\s+(.+?)(?:\r?\n|$)", text)
+        if title_match:
+            nav["title"] = title_match.group(1).strip()
+        return nav
+
+    # cd / cat / click / focus / type / refresh all funnel through the
+    # CLI's generic dict pretty-printer; an ``{"output": text}`` shape
+    # is enough.
     return {"output": text}
 
 
@@ -600,6 +647,7 @@ def ls(path: str = "/", use_daemon: bool = False, *, session: Any = None) -> dic
     """
     translated, is_absolute = _translate_path(path)
     if is_absolute:
+        _require_session_for_split_check("ls", session, use_daemon)
         # Split-and-check: the anchor's success is load-bearing — if
         # cd fails, ls would run in the wrong cwd and produce
         # wrong-target results. Three separate _call_execute calls so
@@ -689,6 +737,7 @@ def cat(path: str, use_daemon: bool = False, *, session: Any = None) -> dict:
             "Use `ls` to list the root's children, or pass a specific name."
         )
     if is_absolute:
+        _require_session_for_split_check("cat", session, use_daemon)
         # Split-and-check: anchor at tab root, halt if anchor fails,
         # otherwise run relative cat, restore. Anchor success is
         # load-bearing — without it cat resolves the relative path
@@ -771,6 +820,12 @@ def grep(
     # useful error regardless of which branch consumes it.
     _assert_single_line("prev", prev)
 
+    # Both rooted branches (absolute and relative) issue 3 separate
+    # `_call_execute` calls — anchor cd, grep, restore cd — and depend on
+    # all three landing in the same DOMShell lane. Check session here so
+    # the requirement applies uniformly.
+    _require_session_for_split_check("grep", session, use_daemon)
+
     # Split-and-check. Anchor success is load-bearing: if the cd
     # to the rooting path fails, grep would search against the wrong
     # cwd and produce wrong-scope matches.
@@ -820,6 +875,7 @@ def click(path: str, use_daemon: bool = False, *, session: Any = None) -> dict:
             "click: an element name is required — cannot click the tab root."
         )
     if is_absolute:
+        _require_session_for_split_check("click", session, use_daemon)
         # Split-and-check: anchor at tab root, halt if anchor fails,
         # otherwise click the relative path, restore. Anchor success is
         # load-bearing — clicking the wrong element if cwd has drifted
@@ -851,22 +907,22 @@ def open_url(url: str, use_daemon: bool = False, *, session: Any = None) -> dict
         session: Harness session whose DOMShell lane id is reused / updated
 
     Returns:
-        Dict shaped ``{"output": str}`` on success, or
-        ``{"error": str, "output": str}`` on failure.
+        Dict shaped ``{"output": str, "url": str, "title": str}`` on
+        success, or ``{"error": str, "output": str}`` on failure.
 
-        Note no ``"url"`` key. ``page.open_page`` already calls
-        ``session.set_url(url)`` from the input arg unconditionally, so
-        this isn't a regression for ``open_url`` callers. But the same
-        absence applies to ``back()`` / ``forward()`` — ``page.go_back``
-        and ``page.go_forward`` guard their ``session.set_url`` updates
-        on ``"url" in result``, and that guard now always evaluates
-        False (it was already False against the pre-parse
-        ``CallToolResult`` shape, so no behavior change vs main, but
-        worth knowing for future parser refinement).
+        ``url`` and ``title`` are extracted from the DOMShell response
+        text via regex (lines starting ``URL:`` / ``Title:``) — they're
+        present when DOMShell emits those lines, omitted otherwise.
+        ``page.open_page`` doesn't depend on ``url`` (it always calls
+        ``session.set_url(url)`` from the input arg), but the same
+        parser is used by ``back`` / ``forward`` whose ``page``-layer
+        callers DO depend on ``"url" in result``.
 
     Example:
         >>> open_url("https://example.com")
-        {"output": "✓ Opened https://example.com\\n[lane: 1]"}
+        {"output": "✓ Opened\\nURL: https://example.com\\nTitle: Example Domain\\n[lane: 1]",
+         "url": "https://example.com",
+         "title": "Example Domain"}
     """
     result = asyncio.run(
         _call_execute(f"open {_q(url)}", use_daemon, session=session)
@@ -896,15 +952,13 @@ def back(use_daemon: bool = False, *, session: Any = None) -> dict:
         session: Harness session whose DOMShell lane id is reused / updated
 
     Returns:
-        Dict shaped ``{"output": str}`` on success, or
-        ``{"error": str, "output": str}`` on failure.
-
-        Note no ``"url"`` key. ``page.go_back`` guards its
-        ``session.set_url`` update on ``"url" in result`` and that
-        guard now always evaluates False — ``session.current_url`` is
-        not updated from a back navigation. (Same end behavior as
-        against the pre-parse ``CallToolResult`` shape, but worth
-        knowing for future parser refinement.)
+        Dict shaped ``{"output": str, "url": str, "title": str}`` on
+        success, or ``{"error": str, "output": str}`` on failure. ``url``
+        and ``title`` are extracted from the response text via regex
+        (lines starting ``URL:`` / ``Title:``) and may be omitted if
+        the response shape changes upstream — ``page.go_back`` guards
+        its ``session.set_url`` update on ``"url" in result``, so a
+        missing URL silently skips the update.
     """
     result = asyncio.run(_call_execute("back", use_daemon, session=session))
     return _parse_execute_result(result, "back")
@@ -918,15 +972,13 @@ def forward(use_daemon: bool = False, *, session: Any = None) -> dict:
         session: Harness session whose DOMShell lane id is reused / updated
 
     Returns:
-        Dict shaped ``{"output": str}`` on success, or
-        ``{"error": str, "output": str}`` on failure.
-
-        Note no ``"url"`` key. ``page.go_forward`` guards its
-        ``session.set_url`` update on ``"url" in result`` and that
-        guard now always evaluates False — ``session.current_url`` is
-        not updated from a forward navigation. (Same end behavior as
-        against the pre-parse ``CallToolResult`` shape, but worth
-        knowing for future parser refinement.)
+        Dict shaped ``{"output": str, "url": str, "title": str}`` on
+        success, or ``{"error": str, "output": str}`` on failure. ``url``
+        and ``title`` are extracted from the response text via regex
+        (lines starting ``URL:`` / ``Title:``) and may be omitted if
+        the response shape changes upstream — ``page.go_forward`` guards
+        its ``session.set_url`` update on ``"url" in result``, so a
+        missing URL silently skips the update.
     """
     result = asyncio.run(_call_execute("forward", use_daemon, session=session))
     return _parse_execute_result(result, "forward")

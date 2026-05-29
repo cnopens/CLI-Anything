@@ -275,6 +275,96 @@ def test_grep_rooted_anchor_failure_short_circuits(mock_call):
     assert "error" in result
 
 
+# ── Absolute split-and-check requires session in non-daemon mode ─────
+#
+# Without a session (and without daemon mode), each `_call_execute` lands
+# in a fresh DOMShell lane — the anchor cd's cwd doesn't carry over to
+# the operation, producing wrong-scope output. Raise up front to surface
+# the misuse instead of silently producing wrong results. (Mirrors
+# `type_text`'s round-6.1 guard; propagated to ls/cat/click/grep in
+# round 7.2 per Codex P2 #2.)
+
+
+def test_ls_absolute_without_session_raises_in_non_daemon():
+    with pytest.raises(ValueError, match="session"):
+        backend.ls("/main", session=None)
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_ls_absolute_with_daemon_no_session_works(mock_call):
+    """Daemon mode shares lane via the persistent connection — no
+    session required."""
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.ls("/main", use_daemon=True, session=None)
+    # 3-call split-and-check still happens.
+    assert mock_call.call_count == 3
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_ls_relative_without_session_works(mock_call):
+    """Relative path runs as a single call — no anchor, no lane drift
+    risk, so session=None is fine in non-daemon mode."""
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.ls("main", session=None)
+    assert mock_call.call_count == 1
+
+
+def test_cat_absolute_without_session_raises_in_non_daemon():
+    with pytest.raises(ValueError, match="session"):
+        backend.cat("/main/btn", session=None)
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_cat_relative_without_session_works(mock_call):
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.cat("main/btn", session=None)
+    assert mock_call.call_count == 1
+
+
+def test_click_absolute_without_session_raises_in_non_daemon():
+    with pytest.raises(ValueError, match="session"):
+        backend.click("/main/button[0]", session=None)
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_click_relative_without_session_works(mock_call):
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.click("button[0]", session=None)
+    assert mock_call.call_count == 1
+
+
+def test_grep_rooted_absolute_without_session_raises_in_non_daemon():
+    """Rooted grep with absolute path requires session for lane consistency."""
+    with pytest.raises(ValueError, match="session"):
+        backend.grep("Login", path="/main", prev="/", session=None)
+
+
+def test_grep_rooted_relative_without_session_raises_in_non_daemon():
+    """Rooted grep with RELATIVE path also requires session — both
+    branches issue 3 separate calls and depend on shared lane state.
+    """
+    with pytest.raises(ValueError, match="session"):
+        backend.grep("Login", path="dialog", prev="/main", session=None)
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_grep_rooted_relative_with_daemon_no_session_works(mock_call):
+    """Daemon mode shares lane via the persistent connection — no
+    session required even for relative-rooted grep."""
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.grep("Login", path="dialog", prev="/main", use_daemon=True, session=None)
+    # 3-call split-and-check still happens.
+    assert mock_call.call_count == 3
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_grep_unrooted_without_session_works(mock_call):
+    """Unrooted grep is a single call — no session required."""
+    mock_call.return_value = _make_result("[lane: 1]")
+    backend.grep("Login", session=None)
+    assert mock_call.call_count == 1
+
+
 # ── _parse_execute_result: dict shapes per command ───────────────────
 #
 # DOMShell 2.x returns text content; the CLI was written for the
@@ -325,14 +415,85 @@ def test_parse_execute_result_error_returns_error_dict():
     assert parsed["output"] == parsed["error"]
 
 
-def test_parse_execute_result_default_for_other_commands():
-    """cat/click/focus/type/open/refresh/back/forward all fall through
-    to the generic ``{"output": text}`` shape."""
-    for cmd in ("cat", "click", "focus", "type", "open", "refresh", "back", "forward"):
+def test_parse_execute_result_default_for_non_nav_commands():
+    """cat/click/focus/type/refresh fall through to the generic
+    ``{"output": text}`` shape (nav commands get their own branch —
+    see test_parse_execute_result_nav_*)."""
+    for cmd in ("cat", "click", "focus", "type", "refresh"):
         parsed = backend._parse_execute_result(
             _make_result("done\n[lane: 1]"), cmd,
         )
         assert parsed == {"output": "done"}
+
+
+# ── Nav commands (back/forward/navigate/open): URL/title extraction ──
+
+
+def test_parse_execute_result_nav_extracts_url_and_title():
+    """back/forward/navigate/open extract `url` and `title` so
+    page.go_back/go_forward's `"url" in result` guards fire and
+    session.set_url updates correctly. (Codex P2 #1.)
+    """
+    fixture = _make_result(
+        "✓ Navigated back\n"
+        "URL: https://example.com/page\n"
+        "Title: Example Page\n"
+        "[lane: 7]"
+    )
+    for cmd in ("back", "forward", "navigate", "open"):
+        parsed = backend._parse_execute_result(fixture, cmd)
+        assert parsed["url"] == "https://example.com/page"
+        assert parsed["title"] == "Example Page"
+        # The raw output is preserved alongside.
+        assert "✓ Navigated back" in parsed["output"]
+
+
+def test_parse_execute_result_nav_omits_url_when_missing():
+    """Malformed/early response without URL line → `output` only, no crash."""
+    parsed = backend._parse_execute_result(_make_result("✓ done\n[lane: 1]"), "back")
+    assert parsed == {"output": "✓ done"}
+    assert "url" not in parsed
+    assert "title" not in parsed
+
+
+def test_parse_execute_result_nav_extracts_url_without_title():
+    """A response with URL but no Title line still extracts the URL."""
+    parsed = backend._parse_execute_result(
+        _make_result("URL: https://example.com/x\n[lane: 1]"), "open",
+    )
+    assert parsed["url"] == "https://example.com/x"
+    assert "title" not in parsed
+
+
+def test_parse_execute_result_nav_title_handles_trailing_whitespace():
+    """Title regex strips trailing newline/whitespace."""
+    parsed = backend._parse_execute_result(
+        _make_result(
+            "URL: https://example.com\n"
+            "Title: Spaced Title   \n"
+            "[lane: 1]"
+        ),
+        "open",
+    )
+    assert parsed["title"] == "Spaced Title"
+
+
+@patch.object(backend, "_call_execute", new_callable=AsyncMock)
+def test_back_returns_dict_with_url_key(mock_call):
+    """End-to-end: backend.back() returns a dict with `url` so
+    page.go_back's guard fires. (The Codex P2 #1 regression case.)
+    """
+    sess = _make_session(working_dir="/")
+    mock_call.return_value = _make_result(
+        "✓ Navigated back\n"
+        "URL: https://previous.com\n"
+        "Title: Previous\n"
+        "[lane: 1]"
+    )
+    result = backend.back(session=sess)
+    assert "url" in result
+    assert result["url"] == "https://previous.com"
+    assert result["title"] == "Previous"
 
 
 # ── End-to-end: wrappers return parsed dicts (not CallToolResult) ────
@@ -473,13 +634,14 @@ def test_grep_rooted_emits_three_call_sequence(mock_call):
     ``session.domshell_lane_id`` — see round-4 lane-persistence tests.
     """
     mock_call.return_value = _make_result("[lane: 1]")
+    sess = _make_session(working_dir="/")
 
-    backend.grep("Login", path="/main", prev="/")
+    backend.grep("Login", path="/main", prev="/", session=sess)
 
     assert mock_call.call_args_list == [
-        call("cd %here%/main", False, session=None),
-        call("grep Login", False, session=None),
-        call("cd %here%", False, session=None),
+        call("cd %here%/main", False, session=sess),
+        call("grep Login", False, session=sess),
+        call("cd %here%", False, session=sess),
     ]
 
 
@@ -490,14 +652,15 @@ def test_grep_rooted_quotes_path_with_spaces(mock_call):
     Upstream-smoked: DOMShell's `cd` accepts the quoted form cleanly.
     """
     mock_call.return_value = _make_result("[lane: 1]")
+    sess = _make_session(working_dir="/")
 
-    backend.grep("Login", path="/path with spaces", prev="/")
+    backend.grep("Login", path="/path with spaces", prev="/", session=sess)
 
     # Three-call sequence — quoting applies to the anchor (first call).
     assert mock_call.call_args_list == [
-        call("cd '%here%/path with spaces'", False, session=None),
-        call("grep Login", False, session=None),
-        call("cd %here%", False, session=None),
+        call("cd '%here%/path with spaces'", False, session=sess),
+        call("grep Login", False, session=sess),
+        call("cd %here%", False, session=sess),
     ]
 
 
