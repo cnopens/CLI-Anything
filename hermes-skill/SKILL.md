@@ -7,7 +7,11 @@ description: Use when the user wants Hermes Agent to build, refine, test, or val
 
 Use this skill when the user wants Hermes Agent to act like the `CLI-Anything` builder.
 
-If this skill is being used from inside the `CLI-Anything` repository, read `../cli-anything-plugin/HARNESS.md` before implementation. That file is the full methodology source of truth. If it is not available, follow the condensed rules below.
+Before implementation, use the full methodology source of truth when available:
+
+1. If this skill is being used from inside the `CLI-Anything` repository, read `../cli-anything-plugin/HARNESS.md` first.
+2. If that local file is unavailable, clone or download `cli-anything-plugin` from `https://github.com/HKUDS/CLI-Anything/tree/main/cli-anything-plugin`, then use `HARNESS.md` and the resources around it from that folder.
+3. Only if both local and network retrieval fail, follow the condensed rules below.
 
 ## Inputs
 
