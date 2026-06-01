@@ -499,21 +499,26 @@ async def _call_execute(
     global _daemon_session, _daemon_read, _daemon_write
 
     arguments: dict[str, Any] = {"command": command}
-    # Lane handling for non-daemon mode: every fresh stdio ClientSession
-    # would otherwise be assigned a brand-new lane, scattering `page open`
-    # / `fs ls` / etc. across disjoint browser state. So we name the lane
-    # explicitly on every call:
-    #   • subsequent calls   → group_id=<previously captured lane id>
-    #   • very first call    → group_id="new" — DOMShell creates a fresh
-    #     isolated lane and returns its id in the [lane: ...] marker,
-    #     which `_capture_lane` stores on the session for next time.
-    # DOMShell 2.0.2 deprecated omitting `group_id` entirely (emits a
-    # [DEPRECATION] warning in the reply; hard error in 3.0.0). Passing
-    # "new" on the first call matches our actual intent — we want our own
-    # private lane, not the shared one — and silences the deprecation
-    # warning across every REPL session.
+    # Lane handling. DOMShell 2.0.2 deprecated omitting `group_id`
+    # (emits a [DEPRECATION] warning in the reply; hard error in 3.0.0),
+    # so we name the lane explicitly on every call. Three cases:
+    #   • subsequent calls (session has captured lane) → reuse that lane.
+    #   • non-daemon first call → group_id="new" — DOMShell creates a
+    #     fresh isolated lane and returns its id in the [lane: ...]
+    #     marker, which `_capture_lane` stores on the session for next
+    #     time.
+    #   • daemon-mode first call without a Session → group_id="shared"
+    #     — the daemon's persistent connection has its own default lane
+    #     that stays sticky across calls, so direct (sessionless) daemon
+    #     workflows like `open_url(use_daemon=True)` followed by
+    #     `ls(use_daemon=True)` share browser state naturally. Using
+    #     "new" here would mint a fresh isolated lane per call and lose
+    #     the page just opened (Codex P2 regression caught on the
+    #     initial 2.0.2 migration commit be62f843b5).
     if session is not None and getattr(session, "domshell_lane_id", None):
         arguments["group_id"] = session.domshell_lane_id
+    elif use_daemon:
+        arguments["group_id"] = "shared"
     else:
         arguments["group_id"] = "new"
 

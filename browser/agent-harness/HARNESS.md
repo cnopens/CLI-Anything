@@ -37,22 +37,28 @@ DOMShell is an npm package that exposes Chrome's Accessibility Tree via MCP:
 
 ### Installation
 
+**Requires `@apireno/domshell` 2.0.2 or newer.** The harness uses
+`group_id="shared"` and `group_id="new"` keywords introduced in 2.0.2 to
+declare lane intent explicitly (silences the deprecation warning that 2.0.2
+added for omitted `group_id`; will become a hard error in DOMShell 3.0.0).
+
 ```bash
-# Verify DOMShell is available (2.0.0 or newer required)
-npx @apireno/domshell --version
+npx @apireno/domshell --version   # should report 2.0.2 or higher
 
 # Install Chrome extension
 # https://chromewebstore.google.com/detail/domshell
 ```
 
-**Minimum version: `@apireno/domshell@2.0.0`.** DOMShell 2.0.0 (May 2026)
-consolidated the MCP tool surface from 38 per-command tools to a single
-`domshell_execute` tool. The harness targets this consolidated tool, so no
-opt-in `--granular` server flag is required.
+The standard `npx @apireno/domshell` invocation pulls the latest published
+version automatically; no manual pinning is required.
+
+DOMShell 2.0.0 (May 2026) consolidated the MCP tool surface from 38
+per-command tools to a single `domshell_execute` tool. The harness targets
+this consolidated tool, so no opt-in `--granular` server flag is required.
 
 ### MCP Tool
 
-DOMShell 2.0.0+ exposes a single MCP tool:
+DOMShell 2.0.2+ exposes a single MCP tool:
 
 | Tool | Description |
 |------|-------------|

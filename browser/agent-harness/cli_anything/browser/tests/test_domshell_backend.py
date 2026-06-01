@@ -1143,6 +1143,36 @@ def test_call_execute_passes_group_id_new_when_lane_is_none():
     assert sess.domshell_lane_id == "brand-new"
 
 
+def test_call_execute_passes_group_id_shared_for_daemon_mode_without_session():
+    """Daemon mode + no session: route to the default per-connection lane
+    via ``group_id="shared"``. The daemon's persistent stdio connection
+    keeps that lane sticky across calls, so direct callers like
+    ``open_url(use_daemon=True)`` followed by ``ls(use_daemon=True)``
+    share browser state without needing a Session object to carry a
+    lane id.
+
+    Migration note (PR #308 follow-up): the initial 2.0.2 migration
+    commit (be62f843b5) passed ``group_id="new"`` in this case, which
+    broke the daemon workflow by creating a fresh isolated lane per
+    call. Caught by Codex P2. Fix re-routes daemon-no-session calls to
+    ``"shared"``.
+    """
+    fake_tool = AsyncMock(return_value=_make_result("✓\n[lane: daemon-default]"))
+
+    fake_mcp_session = AsyncMock()
+    fake_mcp_session.call_tool = fake_tool
+
+    # Simulate a live daemon session — the same path open_url / ls take
+    # when called with use_daemon=True but no Session.
+    with patch.object(backend, "_daemon_session", fake_mcp_session):
+        import asyncio as _aio
+        _aio.run(backend._call_execute("ls /", use_daemon=True, session=None))
+
+    name, arguments = fake_tool.call_args.args
+    assert name == "domshell_execute"
+    assert arguments.get("group_id") == "shared"
+
+
 def test_distinct_sessions_have_isolated_lanes():
     """Two sessions track lanes independently — no cross-contamination."""
     s1 = Session()
