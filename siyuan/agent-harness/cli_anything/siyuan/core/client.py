@@ -183,7 +183,9 @@ class SiYuanClient:
         return self._post("/api/filetree/getIDsByHPath", {"notebook": notebook_id, "path": path})
 
     def list_docs_by_path(self, notebook_id: str, path: str) -> list[dict[str, Any]]:
-        return self._post("/api/filetree/listDocsByPath", {"notebook": notebook_id, "path": path})
+        return self._post("/api/filetree/listDocsByPath", {
+            "notebook": notebook_id, "path": path, "maxListCount": 0,
+        })
 
     def list_doc_tree(self, notebook_id: str, path: str = "/", max_depth: int = -1, sort: int = 0) -> list[dict[str, Any]]:
         return self._post("/api/filetree/listDocTree", {
@@ -191,7 +193,7 @@ class SiYuanClient:
         })
 
     def search_docs(self, keyword: str) -> list[dict[str, Any]]:
-        return self._post("/api/filetree/searchDocs", {"keyword": keyword})
+        return self._post("/api/filetree/searchDocs", {"k": keyword})
 
     def create_daily_note(self, notebook_id: str) -> dict[str, Any]:
         return self._post("/api/filetree/createDailyNote", {"notebook": notebook_id})
