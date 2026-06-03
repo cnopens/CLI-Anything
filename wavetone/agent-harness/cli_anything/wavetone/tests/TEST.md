@@ -2,7 +2,7 @@
 
 ## Test Inventory Plan
 
-- `test_core.py`: 8 unit tests for project manifests, audio probing, session logs,
+- `test_core.py`: 9 unit tests for project manifests, audio probing, session logs,
   and backend discovery.
 - `test_full_e2e.py`: 5 E2E tests covering CLI subprocess workflows and real
   WaveTone launch smoke coverage.
@@ -17,6 +17,7 @@
 - Probe a generated WAV file with the Python stdlib.
 - Append and reload session events.
 - Resolve `WAVETONE_EXE` from the environment.
+- Preserve inherited project context for REPL-style nested CLI invocations.
 
 ## E2E Test Plan
 
@@ -68,7 +69,7 @@ python -m pytest cli_anything\wavetone\tests\ -v -s
 Result:
 
 ```text
-collected 13 items
+collected 14 items
 
 cli_anything/wavetone/tests/test_core.py::test_create_project_manifest PASSED
 cli_anything/wavetone/tests/test_core.py::test_rejects_unsupported_audio PASSED
@@ -78,19 +79,21 @@ cli_anything/wavetone/tests/test_core.py::test_update_analysis_settings PASSED
 cli_anything/wavetone/tests/test_core.py::test_probe_wav_metadata PASSED
 cli_anything/wavetone/tests/test_core.py::test_session_event_log PASSED
 cli_anything/wavetone/tests/test_core.py::test_find_wavetone_from_env PASSED
+cli_anything/wavetone/tests/test_core.py::test_cli_preserves_inherited_project_context PASSED
 cli_anything/wavetone/tests/test_full_e2e.py::TestCLISubprocess::test_help PASSED
 cli_anything/wavetone/tests/test_full_e2e.py::TestCLISubprocess::test_project_audio_workflow_json PASSED
 cli_anything/wavetone/tests/test_full_e2e.py::TestCLISubprocess::test_formats_json PASSED
 cli_anything/wavetone/tests/test_full_e2e.py::TestRealWaveToneBackend::test_doctor_real_backend PASSED
 cli_anything/wavetone/tests/test_full_e2e.py::TestRealWaveToneBackend::test_launch_real_backend_with_wav PASSED
 
-13 passed in 3.35s
+14 passed in 3.53s
 ```
 
 ## Coverage Notes
 
 - Unit tests cover manifest creation, validation, persistence, labels, tempo,
-  analysis settings, audio probing, session logs, and backend discovery.
+  analysis settings, audio probing, session logs, backend discovery, and
+  inherited CLI project context.
 - CLI subprocess tests resolve and use the installed `cli-anything-wavetone`
   entry point.
 - Real backend coverage launches `C:\Users\Hp\Desktop\wavetone2.6.1\wavetone.exe`

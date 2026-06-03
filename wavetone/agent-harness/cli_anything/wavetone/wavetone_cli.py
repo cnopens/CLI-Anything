@@ -63,7 +63,10 @@ def load_ctx_project(ctx: click.Context, explicit_path: str | Path | None = None
 def cli(ctx: click.Context, project_path: str | None, json_mode: bool) -> None:
     """Agent-native CLI harness for WaveTone 2.61."""
     ctx.ensure_object(dict)
-    ctx.obj["project"] = project_path
+    if project_path is not None:
+        ctx.obj["project"] = project_path
+    else:
+        ctx.obj.setdefault("project", None)
     ctx.obj["json"] = json_mode
     if ctx.invoked_subcommand is None:
         ctx.invoke(repl)

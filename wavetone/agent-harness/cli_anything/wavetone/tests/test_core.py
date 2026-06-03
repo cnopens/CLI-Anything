@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import struct
 import wave
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from cli_anything.wavetone.core.audio import probe_audio
 from cli_anything.wavetone.core.project import (
@@ -19,6 +21,7 @@ from cli_anything.wavetone.core.project import (
 )
 from cli_anything.wavetone.core.session import append_event, load_events
 from cli_anything.wavetone.utils import wavetone_backend
+from cli_anything.wavetone.wavetone_cli import cli
 
 
 def make_wav(path: Path, freq: float = 440.0, duration: float = 0.25, sample_rate: int = 8000) -> Path:
@@ -109,3 +112,18 @@ def test_find_wavetone_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("WAVETONE_EXE", str(fake))
 
     assert wavetone_backend.find_wavetone() == fake.resolve()
+
+
+def test_cli_preserves_inherited_project_context(tmp_path: Path) -> None:
+    wav = make_wav(tmp_path / "tone.wav")
+    project_path = save_project(create_project(wav), tmp_path / "tone.wt.json")
+
+    result = CliRunner().invoke(
+        cli,
+        ["--json", "audio", "probe"],
+        obj={"project": str(project_path), "json": False},
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["audio"]["path"] == str(wav.resolve())
