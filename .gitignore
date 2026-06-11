@@ -100,6 +100,7 @@
 !/3MF/
 !/calibre/
 !/rekordbox/
+!/cc-switch/
 !/siyuan/
 # Step 5: Inside each software dir, ignore everything (including dotfiles)
 /gimp/*
@@ -208,6 +209,8 @@
 /calibre/.*
 /rekordbox/*
 /rekordbox/.*
+/cc-switch/*
+/cc-switch/.*
 /siyuan/*
 /siyuan/.*
 
@@ -275,6 +278,7 @@
 !/quietshrink/agent-harness/
 !/mailchimp/agent-harness/
 !/rekordbox/agent-harness/
+!/cc-switch/agent-harness/
 !/siyuan/agent-harness/
 
 # Exclude non-gedit demo macros from macrocli (local only)
